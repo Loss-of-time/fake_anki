@@ -63,9 +63,18 @@ export default class AnkiToObsidianPlugin extends Plugin {
           if (action === "version") {
             reply(6, null);
           } else if (action === "addNote") {
-            const fields = params?.note?.fields ?? {};
-            const text = Object.values(fields).join("\n\n") + "\n\n---\n\n";
-            await this.appendToFile(text);
+            const note = params?.note ?? {};
+            const fields = note.fields ?? {};
+            if (String(note.deckName ?? "").toLowerCase() === "pot") {
+              // ponytail: hardcoded pot deck -> obsidian-to-anki format; generalize when more decks need it
+              await this.appendToFile(
+                `${fields.Front ?? ""} #basic\n${fields.Back ?? ""}\n\n---\n\n`,
+                "Pot/anki_card.md"
+              );
+            } else {
+              const text = Object.values(fields).join("\n\n") + "\n\n---\n\n";
+              await this.appendToFile(text);
+            }
             reply(Date.now(), null);
           } else {
             reply(null, "unsupported action");
@@ -85,8 +94,11 @@ export default class AnkiToObsidianPlugin extends Plugin {
     else this.startServer();
   }
 
-  async appendToFile(text: string) {
-    const path = this.settings.targetFile;
+  async appendToFile(text: string, path = this.settings.targetFile) {
+    const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
+    if (dir && !(await this.app.vault.adapter.exists(dir))) {
+      await this.app.vault.adapter.mkdir(dir);
+    }
     if (!(await this.app.vault.adapter.exists(path))) {
       await this.app.vault.create(path, "");
     }
