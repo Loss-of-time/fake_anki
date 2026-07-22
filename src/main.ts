@@ -4,11 +4,13 @@ import * as http from "http";
 interface AnkiToObsidianSettings {
   port: number;
   targetFile: string;
+  debug: boolean;
 }
 
 const DEFAULT_SETTINGS: AnkiToObsidianSettings = {
   port: 8766,
   targetFile: "anki-cards.md",
+  debug: false,
 };
 
 export default class AnkiToObsidianPlugin extends Plugin {
@@ -51,7 +53,13 @@ export default class AnkiToObsidianPlugin extends Plugin {
           res.end(JSON.stringify({ result, error }));
         };
         try {
-          const { action, params } = JSON.parse(body);
+          const reqJson = JSON.parse(body);
+          if (this.settings.debug) {
+            await this.appendToFile(
+              "```json\n" + JSON.stringify(reqJson, null, 2) + "\n```\n\n---\n\n"
+            );
+          }
+          const { action, params } = reqJson;
           if (action === "version") {
             reply(6, null);
           } else if (action === "addNote") {
@@ -123,6 +131,18 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.targetFile)
           .onChange(async (value) => {
             this.plugin.settings.targetFile = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Debug mode")
+      .setDesc("Append every incoming request body as a ```json code block to the target file.")
+      .addToggle((toggle) =>
+        toggle
+          .setValue(this.plugin.settings.debug)
+          .onChange(async (value) => {
+            this.plugin.settings.debug = value;
             await this.plugin.saveSettings();
           })
       );

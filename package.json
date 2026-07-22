@@ -1,6 +1,6 @@
 {
   "name": "anki-to-obsidian",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "AnkiConnect-compatible endpoint that appends notes to a markdown file in your vault.",
   "main": "main.js",
   "scripts": {
