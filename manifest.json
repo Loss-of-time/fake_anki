@@ -1,0 +1,9 @@
+{
+  "id": "anki-to-obsidian",
+  "name": "Anki to Obsidian",
+  "version": "1.0.0",
+  "minAppVersion": "1.4.0",
+  "description": "AnkiConnect-compatible local endpoint that appends incoming notes to a markdown file.",
+  "author": "loss",
+  "isDesktopOnly": true
+}
