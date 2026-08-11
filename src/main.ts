@@ -3,14 +3,12 @@ import * as http from "http";
 
 interface AnkiToObsidianSettings {
   port: number;
-  targetFile: string;
   potFile: string;
   debug: boolean;
 }
 
 const DEFAULT_SETTINGS: AnkiToObsidianSettings = {
   port: 8766,
-  targetFile: "anki-cards.md",
   potFile: "Pot/anki_card.md",
   debug: false,
 };
@@ -69,10 +67,8 @@ export default class AnkiToObsidianPlugin extends Plugin {
             const fields = note.fields ?? {};
             if (String(note.deckName ?? "").toLowerCase() === "pot") {
               // ponytail: pot deck -> obsidian-to-anki format; generalize when more decks need it
-              const potFile = this.settings.potFile?.trim() || "Pot/anki_card.md";
               await this.appendToFile(
-                `${fields.Front ?? ""} #basic\n${fields.Back ?? ""}\n\n---\n\n`,
-                potFile
+                `${fields.Front ?? ""} #basic\n${fields.Back ?? ""}\n\n---\n\n`
               );
             } else {
               const text = Object.values(fields).join("\n\n") + "\n\n---\n\n";
@@ -97,7 +93,7 @@ export default class AnkiToObsidianPlugin extends Plugin {
     else this.startServer();
   }
 
-  async appendToFile(text: string, path = this.settings.targetFile) {
+  async appendToFile(text: string, path = this.settings.potFile?.trim() || "Pot/anki_card.md") {
     const dir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : "";
     if (dir && !(await this.app.vault.adapter.exists(dir))) {
       await this.app.vault.adapter.mkdir(dir);
@@ -138,21 +134,8 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Target file")
-      .setDesc("Vault-relative path that cards are appended to (created if missing).")
-      .addText((text) =>
-        text
-          .setPlaceholder("anki-cards.md")
-          .setValue(this.plugin.settings.targetFile)
-          .onChange(async (value) => {
-            this.plugin.settings.targetFile = value;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
       .setName("Pot file")
-      .setDesc("Vault-relative path for the pot deck (obsidian-to-anki format). Empty falls back to Pot/anki_card.md.")
+      .setDesc("Vault-relative path all cards are appended to (created if missing). Empty falls back to Pot/anki_card.md.")
       .addText((text) =>
         text
           .setPlaceholder("Pot/anki_card.md")
