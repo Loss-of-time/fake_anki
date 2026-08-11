@@ -4,12 +4,14 @@ import * as http from "http";
 interface AnkiToObsidianSettings {
   port: number;
   targetFile: string;
+  potFile: string;
   debug: boolean;
 }
 
 const DEFAULT_SETTINGS: AnkiToObsidianSettings = {
   port: 8766,
   targetFile: "anki-cards.md",
+  potFile: "Pot/anki_card.md",
   debug: false,
 };
 
@@ -66,10 +68,11 @@ export default class AnkiToObsidianPlugin extends Plugin {
             const note = params?.note ?? {};
             const fields = note.fields ?? {};
             if (String(note.deckName ?? "").toLowerCase() === "pot") {
-              // ponytail: hardcoded pot deck -> obsidian-to-anki format; generalize when more decks need it
+              // ponytail: pot deck -> obsidian-to-anki format; generalize when more decks need it
+              const potFile = this.settings.potFile?.trim() || "Pot/anki_card.md";
               await this.appendToFile(
                 `${fields.Front ?? ""} #basic\n${fields.Back ?? ""}\n\n---\n\n`,
-                "Pot/anki_card.md"
+                potFile
               );
             } else {
               const text = Object.values(fields).join("\n\n") + "\n\n---\n\n";
@@ -143,6 +146,19 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.targetFile)
           .onChange(async (value) => {
             this.plugin.settings.targetFile = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Pot file")
+      .setDesc("Vault-relative path for the pot deck (obsidian-to-anki format). Empty falls back to Pot/anki_card.md.")
+      .addText((text) =>
+        text
+          .setPlaceholder("Pot/anki_card.md")
+          .setValue(this.plugin.settings.potFile)
+          .onChange(async (value) => {
+            this.plugin.settings.potFile = value;
             await this.plugin.saveSettings();
           })
       );
