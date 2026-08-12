@@ -12,5 +12,6 @@
     "strictNullChecks": true,
     "lib": ["DOM", "ES2018"]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["tests"]
 }

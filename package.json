@@ -1,11 +1,12 @@
 {
   "name": "anki-to-obsidian",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "AnkiConnect-compatible endpoint that appends notes to a markdown file in your vault.",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
-    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production"
+    "build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
+    "test": "node scripts/run-tests.mjs"
   },
   "license": "MIT",
   "devDependencies": {
