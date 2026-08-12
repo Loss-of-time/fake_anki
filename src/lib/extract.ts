@@ -20,12 +20,3 @@ export function stripMarkers(s: string): string {
     .replace(/【([^】：]+)：[^】]*】/g, "$1")
     .replace(/【([^】]+)】/g, "$1");
 }
-
-// 提取卡背面 = 释义 + 例句（原句 + 中文），以 <br> 分行
-export function buildBack(meaning: string, en: string, zh: string): string {
-  const parts: string[] = [];
-  if (meaning.trim()) parts.push(meaning.trim());
-  if (en) parts.push("例：" + en);
-  if (zh) parts.push(zh);
-  return parts.join("<br>");
-}

@@ -1,9 +1,9 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import * as http from "http";
 import { Card, CARD_SEP, isDeleteMarker, parseCards, serializeCard } from "./lib/cards";
-import { fixText, sentenceCase } from "./lib/normalize";
-import { buildBack, extractMarked, stripMarkers } from "./lib/extract";
-import { cardKey, mergeExample } from "./lib/dedup";
+import { sentenceCase } from "./lib/normalize";
+import { extractMarked, stripMarkers } from "./lib/extract";
+import { cardKey } from "./lib/dedup";
 import { callLLM as libCallLLM, LLM_BATCH, LLMOut } from "./lib/llm";
 
 interface AnkiToObsidianSettings {
@@ -15,8 +15,6 @@ interface AnkiToObsidianSettings {
   llmModel: string;
   deckDir: string;
   cardsPerPage: number;
-  maxExamples: number;
-  extractCount: number;
 }
 
 const DEFAULT_SETTINGS: AnkiToObsidianSettings = {
@@ -28,8 +26,6 @@ const DEFAULT_SETTINGS: AnkiToObsidianSettings = {
   llmModel: "deepseek-chat",
   deckDir: "Pot/anki",
   cardsPerPage: 100,
-  maxExamples: 3,
-  extractCount: 2,
 };
 
 function deckIndex(path: string): number {
@@ -40,6 +36,7 @@ function deckIndex(path: string): number {
 export default class AnkiToObsidianPlugin extends Plugin {
   settings: AnkiToObsidianSettings;
   server: http.Server | null = null;
+  consolidating = false; // 整理长任务进行中标记，防止重复触发
 
   async onload() {
     await this.loadSettings();
@@ -47,7 +44,7 @@ export default class AnkiToObsidianPlugin extends Plugin {
     this.addSettingTab(new AnkiToObsidianSettingTab(this.app, this));
     this.addCommand({
       id: "consolidate-buffer",
-      name: "整理缓冲池：提取到分页卡片",
+      name: "整理缓冲池：规范化到分页卡片",
       callback: () => {
         void this.consolidateBuffer();
       },
@@ -138,10 +135,15 @@ export default class AnkiToObsidianPlugin extends Plugin {
   // ---- 整理：缓冲池 -> 分页卡片 ----
 
   async consolidateBuffer() {
+    if (this.consolidating) {
+      new Notice("整理正在进行中，请稍候");
+      return;
+    }
+    this.consolidating = true;
     const adapter = this.app.vault.adapter;
     const bufferPath = this.settings.potFile?.trim() || "Pot/anki_card.md";
     const deckDir = this.settings.deckDir?.trim() || "Pot/anki";
-    const stats = { added: 0, merged: 0, dropped: 0, failed: 0, deleted: 0 };
+    const stats = { added: 0, dropped: 0, failed: 0, deleted: 0 };
     try {
       if (!(await adapter.exists(bufferPath))) {
         new Notice("缓冲池文件不存在：" + bufferPath);
@@ -152,40 +154,48 @@ export default class AnkiToObsidianPlugin extends Plugin {
         new Notice("缓冲池为空，无需整理");
         return;
       }
+      new Notice("整理开始：共 " + rawCards.length + " 张卡待处理");
 
-      // 分类：带【】标记 / 单行单词卡 / 整句；DELETE 标记单独收集
-      const marked: { en: string; zh: string; tokens: { word: string; meaning: string }[] }[] = [];
-      const words: Card[] = [];
-      const sentences: { raw: Card; en: string; zh: string }[] = [];
+      // 分类：带【】标记的卡直通（机械清理，不送 LLM）；其余送 LLM 规范化；DELETE 标记单独收集
+      const marked: Card[] = [];
+      const toLLM: { raw: Card; en: string; zh: string }[] = [];
       const deleteMarkers: Card[] = [];
       for (const c of rawCards) {
         if (isDeleteMarker(c)) {
           deleteMarkers.push(c);
           continue;
         }
-        const tokens = extractMarked(c.front);
-        const zh = c.back.trim();
-        if (tokens.length) marked.push({ en: sentenceCase(stripMarkers(c.front)), zh, tokens });
-        else if (!/\s/.test(c.front)) words.push(c);
-        else sentences.push({ raw: c, en: sentenceCase(c.front), zh });
+        if (extractMarked(c.front).length) {
+          // 用户手动标记：去掉标记后原样成卡
+          marked.push({
+            front: sentenceCase(stripMarkers(c.front)),
+            back: c.back.replace(/\n+/g, "<br>").trim(),
+            id: c.id,
+          });
+        } else {
+          toLLM.push({ raw: c, en: sentenceCase(c.front), zh: c.back.trim() });
+        }
       }
 
-      // 整句走 LLM 批量提取；失败批次的句子留在缓冲池
-      const results: (LLMOut | null)[] = sentences.map(() => null);
-      if (sentences.length) {
+      // 卡片走 LLM 批量规范化；失败批次的卡留在缓冲池
+      const results: (LLMOut | null)[] = toLLM.map(() => null);
+      if (toLLM.length) {
         if (!this.settings.llmApiKey) {
           new Notice(
             "未配置 LLM API Key，" +
-              sentences.length +
-              " 句无法自动提取（留在缓冲池）；可用【】标记手动提取"
+              toLLM.length +
+              " 张卡无法规范化（留在缓冲池）；可用【】标记手动整理"
           );
         } else {
-          for (let i = 0; i < sentences.length; i += LLM_BATCH) {
-            const slice = sentences.slice(i, i + LLM_BATCH);
+          for (let i = 0; i < toLLM.length; i += LLM_BATCH) {
+            const slice = toLLM.slice(i, i + LLM_BATCH);
+            new Notice(
+              "正在规范化第 " + (i + 1) + "~" + (i + slice.length) + " 张（共 " + toLLM.length + " 张）…"
+            );
             try {
               const outs = await this.callLLM(slice.map((s, k) => ({ i: i + k, en: s.en, zh: s.zh })));
               for (const o of outs) {
-                if (o.i >= 0 && o.i < sentences.length) results[o.i] = o;
+                if (o.i >= 0 && o.i < toLLM.length) results[o.i] = o;
               }
             } catch (e) {
               new Notice(
@@ -193,7 +203,7 @@ export default class AnkiToObsidianPlugin extends Plugin {
                   (i + 1) +
                   "~" +
                   (i + slice.length) +
-                  " 句）：" +
+                  " 张）：" +
                   String((e as Error)?.message ?? e)
               );
             }
@@ -201,48 +211,20 @@ export default class AnkiToObsidianPlugin extends Plugin {
         }
       }
 
-      // 组装提取卡（正面=学习点，背面=释义+例句）
-      const pending: { card: Card; en: string; zh: string }[] = [];
-      for (const m of marked) {
-        for (const t of m.tokens) {
-          pending.push({
-            card: { front: sentenceCase(t.word), back: buildBack(t.meaning, m.en, m.zh) },
-            en: m.en,
-            zh: m.zh,
-          });
-        }
-      }
-      for (const w of words) {
-        pending.push({
-          card: {
-            front: sentenceCase(w.front.replace(/[.!?,;:]+$/, "")),
-            back: w.back.replace(/\n+/g, "<br>").trim(),
-          },
-          en: "",
-          zh: "",
-        });
-      }
-      for (let i = 0; i < sentences.length; i++) {
+      // 组装：标记卡直通；LLM 成功的卡 = 规范化结果（保留原卡 ID）；失败留在缓冲池
+      const pending: Card[] = [];
+      for (const m of marked) pending.push(m);
+      for (let i = 0; i < toLLM.length; i++) {
         const r = results[i];
-        if (!r) {
+        if (!r || !r.en.trim()) {
           stats.failed++;
           continue;
         }
-        const en = r.en && r.en.trim() ? fixText(r.en) : sentences[i].en;
-        if (!r.points.length) {
-          stats.dropped++;
-          continue;
-        }
-        for (const p of r.points) {
-          pending.push({
-            card: {
-              front: sentenceCase(p.front),
-              back: buildBack(p.back.replace(/\n+/g, "<br>"), en, sentences[i].zh),
-            },
-            en,
-            zh: sentences[i].zh,
-          });
-        }
+        pending.push({
+          front: r.en.trim(),
+          back: r.zh.replace(/\n+/g, "<br>").trim(),
+          id: toLLM[i].raw.id,
+        });
       }
 
       // 加载分页文件并处理删除标记：分页文件里的 DELETE 卡直接移除；
@@ -272,21 +254,15 @@ export default class AnkiToObsidianPlugin extends Plugin {
         for (const card of files[fi].cards) keyMap.set(cardKey(card), { file: fi, card });
       }
       const newCards: Card[] = [];
-      for (const item of pending) {
-        const key = cardKey(item.card);
-        const hit = keyMap.get(key);
-        if (hit) {
-          if (item.en && mergeExample(hit.card, item.en, item.zh, this.settings.maxExamples)) {
-            stats.merged++;
-            if (hit.file >= 0) files[hit.file].dirty = true;
-          } else {
-            stats.dropped++;
-          }
-        } else {
-          keyMap.set(key, { file: -1, card: item.card });
-          newCards.push(item.card);
-          stats.added++;
+      for (const card of pending) {
+        const key = cardKey(card);
+        if (keyMap.has(key)) {
+          stats.dropped++; // 已存在：跳过，卡仍从缓冲池移除
+          continue;
         }
+        keyMap.set(key, { file: -1, card });
+        newCards.push(card);
+        stats.added++;
       }
 
       // 分页写入：先填满现有文件，再开新文件
@@ -317,17 +293,16 @@ export default class AnkiToObsidianPlugin extends Plugin {
 
       // 缓冲池只保留失败的原始卡
       const failedCards: Card[] = [];
-      for (let i = 0; i < sentences.length; i++) {
-        if (!results[i]) failedCards.push(sentences[i].raw);
+      for (let i = 0; i < toLLM.length; i++) {
+        const r = results[i];
+        if (!r || !r.en.trim()) failedCards.push(toLLM[i].raw);
       }
       await adapter.write(bufferPath, failedCards.map(serializeCard).join(CARD_SEP));
 
       new Notice(
         "整理完成：新增 " +
           stats.added +
-          "，合并 " +
-          stats.merged +
-          "，跳过 " +
+          "，跳过（已存在） " +
           stats.dropped +
           "，删除 " +
           stats.deleted +
@@ -336,6 +311,8 @@ export default class AnkiToObsidianPlugin extends Plugin {
       );
     } catch (e) {
       new Notice("整理失败：" + String((e as Error)?.message ?? e));
+    } finally {
+      this.consolidating = false;
     }
   }
 
@@ -346,7 +323,6 @@ export default class AnkiToObsidianPlugin extends Plugin {
         baseUrl: this.settings.llmBaseUrl,
         apiKey: this.settings.llmApiKey,
         model: this.settings.llmModel,
-        extractCount: this.settings.extractCount,
       },
       sents
     );
@@ -434,7 +410,7 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl).setName("LLM 自动提取").setHeading();
+    new Setting(containerEl).setName("LLM 规范化").setHeading();
 
     new Setting(containerEl)
       .setName("LLM Base URL")
@@ -451,7 +427,7 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("LLM API Key")
-      .setDesc("整理时自动提取句子中的学习点使用；不配置则整句跳过留在缓冲池，可用【】标记手动提取")
+      .setDesc("整理时规范化卡片使用；不配置则卡片留在缓冲池，可用【】标记手动整理")
       .addText((text) => {
         text
           .setPlaceholder("sk-...")
@@ -506,41 +482,11 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
-      .setName("例句上限")
-      .setDesc("同一张卡最多合并几条例句，超出丢弃（去重命中时合并例句）")
-      .addText((text) =>
-        text
-          .setPlaceholder("3")
-          .setValue(String(this.plugin.settings.maxExamples))
-          .onChange(async (value) => {
-            const n = parseInt(value, 10);
-            if (isNaN(n) || n <= 0) return;
-            this.plugin.settings.maxExamples = n;
-            await this.plugin.saveSettings();
-          })
-      );
-
-    new Setting(containerEl)
-      .setName("每句提取数")
-      .setDesc("LLM 自动提取时每句最多提取几个学习点")
-      .addText((text) =>
-        text
-          .setPlaceholder("2")
-          .setValue(String(this.plugin.settings.extractCount))
-          .onChange(async (value) => {
-            const n = parseInt(value, 10);
-            if (isNaN(n) || n <= 0) return;
-            this.plugin.settings.extractCount = n;
-            await this.plugin.saveSettings();
-          })
-      );
-
     new Setting(containerEl).setName("整理").setHeading();
 
     new Setting(containerEl)
       .setName("整理缓冲池")
-      .setDesc("把缓冲池中的原始卡提取为学习卡（【】标记/LLM），去重合并后写入分页文件；已处理的卡从缓冲池删除，DELETE 标记的卡从分页文件移除")
+      .setDesc("把缓冲池中的卡片规范化（LLM 清理格式/断行/大小写，【】标记卡直通），去重后写入分页文件；已处理的卡从缓冲池删除，DELETE 标记的卡从分页文件移除")
       .addButton((button) =>
         button.setButtonText("立即整理").onClick(() => {
           void this.plugin.consolidateBuffer();

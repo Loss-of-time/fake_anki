@@ -1,23 +1,17 @@
-// LLM 提取（OpenAI 兼容 API，纯 Node 实现，无 obsidian 依赖）
+// LLM 规范化（OpenAI 兼容 API，纯 Node 实现，无 obsidian 依赖）
 import * as http from "http";
 import * as https from "https";
 
-export interface LLMPoint {
-  front: string;
-  back: string;
-}
-
 export interface LLMOut {
   i: number;
-  en?: string; // 修正后的句子
-  points: LLMPoint[];
+  en: string; // 规范化后的英文正面
+  zh: string; // 规范化后的中文背面
 }
 
 export interface LLMConfig {
   baseUrl: string;
   apiKey: string;
   model: string;
-  extractCount: number;
 }
 
 export const LLM_BATCH = 20;
@@ -75,17 +69,10 @@ export function parseLLMJson(content: string): LLMOut[] {
   for (const r of parsed) {
     if (!r || typeof r !== "object") continue;
     const i = (r as { i?: unknown }).i;
-    const points = (r as { points?: unknown }).points;
     const en = (r as { en?: unknown }).en;
-    if (typeof i !== "number" || !Array.isArray(points)) continue;
-    const pts: LLMPoint[] = [];
-    for (const p of points) {
-      if (!p || typeof p !== "object") continue;
-      const front = (p as { front?: unknown }).front;
-      if (typeof front !== "string" || !front) continue;
-      pts.push({ front, back: String((p as { back?: unknown }).back ?? "") });
-    }
-    out.push({ i, en: typeof en === "string" ? en : undefined, points: pts });
+    const zh = (r as { zh?: unknown }).zh;
+    if (typeof i !== "number" || typeof en !== "string" || typeof zh !== "string") continue;
+    out.push({ i, en, zh });
   }
   return out;
 }
@@ -96,19 +83,15 @@ export async function callLLM(
 ): Promise<LLMOut[]> {
   if (!cfg.apiKey) throw new Error("未配置 LLM API Key");
   const endpoint = chatCompletionsUrl(cfg.baseUrl);
-  const n = Math.max(1, cfg.extractCount);
   const system =
-    "你是英语学习卡片生成器。用户给你漫画对话中的英文句子（可能全大写、含拼写/标点错误）及其中文翻译，" +
-    "你提取值得学习的单词或语法表达。\n" +
+    "你是英语学习卡片规范化助手。用户给你英文学习卡片的正面（en：英文句子或单词，可能折行、全大写、有拼写/标点错误）" +
+    "和背面（zh：中文翻译，可能折行）。你把每张卡规范化成一张干净的学习卡。\n" +
     "规则：\n" +
-    "1. 修正每句的拼写/标点/大小写问题，作为 en 字段返回（首字母大写，其余小写）。\n" +
-    "2. 每句最多提取 " +
-    n +
-    " 个学习点（points）；没有值得学的返回空数组。\n" +
-    "3. 单词的 front 用原形（lemma），如 soaring → soar。\n" +
-    "4. front 用句子大小写。\n" +
-    "5. back 是中文释义：单词以词性开头（如 \"n. 练习生\"、\"v. 翱翔\"）；语法/表达标出类型（如 \"phr. 更不用说\"）并可加简短用法说明。\n" +
-    '6. 只返回 JSON 数组：[{"i": 句子序号, "en": "修正后的句子", "points": [{"front": "...", "back": "..."}]}]，不要输出其他内容。';
+    "1. en 返回规范化后的英文正面：合并断行成一句话，修正拼写/标点/大小写（首字母大写、其余小写，人名地名等专有名词保持大写），去除多余空格。en 是单词时保持单词形式。\n" +
+    "2. zh 返回规范化后的中文背面：合并断行、修正明显错别字，多句之间用 <br> 分隔；若 zh 为空，把 en 翻译成中文填入。\n" +
+    "3. 只做清理和措辞精简，不得改变句子含义、不得换成其他短语、不得新增释义、例句或学习点。\n" +
+    "4. 无需修改的卡片原样返回。\n" +
+    '5. 只返回 JSON 数组：[{"i": 序号, "en": "...", "zh": "..."}]，不要输出其他内容。';
   const { status, body } = await postJson(
     endpoint,
     JSON.stringify({

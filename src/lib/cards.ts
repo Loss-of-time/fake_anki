@@ -27,8 +27,16 @@ export function parseCards(text: string): Card[] {
       body = body.replace(/<!--ID: \d+-->/, "").trim();
     }
     const lines = body.split("\n");
-    const front = lines[0].replace(/\s*#basic\s*$/, "").trim();
-    const back = lines.slice(1).join("\n").trim();
+    // 正面 = 从开头到 #basic 标记行为止的所有行（折行的句子不再被截断）；无标记时取第一行
+    let frontEnd = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (/#basic\s*$/.test(lines[i])) {
+        frontEnd = i;
+        break;
+      }
+    }
+    const front = lines.slice(0, frontEnd + 1).join("\n").replace(/\s*#basic\s*$/, "").trim();
+    const back = lines.slice(frontEnd + 1).join("\n").trim();
     if (!front && !back) continue;
     cards.push({ front, back, id });
   }

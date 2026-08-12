@@ -15,7 +15,13 @@ export class Plugin {
 }
 
 export class Notice {
-  constructor(_message: string) {}
+  static messages: string[] = [];
+  static reset(): void {
+    Notice.messages = [];
+  }
+  constructor(message: string) {
+    Notice.messages.push(message);
+  }
 }
 
 export class PluginSettingTab {
