@@ -29,7 +29,7 @@ addNote 请求 ──append──▶ 缓冲池 Pot/anki_card.md（原始卡）
 |---|---|---|
 | Port | 8766 | 监听 127.0.0.1 |
 | Pot file | Pot/anki_card.md | 缓冲池路径 |
-| LLM Base URL | https://api.deepseek.com/v1 | OpenAI 兼容地址（DeepSeek/通义/Ollama 均可） |
+| LLM Base URL | https://api.deepseek.com/v1 | OpenAI 兼容地址（根地址或完整 /chat/completions 地址均可；DeepSeek/通义/Ollama 均支持） |
 | LLM API Key | 空 | 不配置则整句跳过，可用【】标记手动提取 |
 | LLM Model | deepseek-chat | 模型名 |
 | Deck 目录 | Pot/anki | 分页文件目录 |

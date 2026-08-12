@@ -22,6 +22,13 @@ export interface LLMConfig {
 
 export const LLM_BATCH = 20;
 
+// 容错：Base URL 可填根地址（https://api.deepseek.com/v1）或完整接口地址（https://api.deepseek.com/chat/completions）
+export function chatCompletionsUrl(baseUrl: string): string {
+  const base = baseUrl.trim().replace(/\/+$/, "");
+  if (!base) throw new Error("未配置 LLM Base URL");
+  return base.endsWith("/chat/completions") ? base : base + "/chat/completions";
+}
+
 function postJson(
   url: string,
   payload: string,
@@ -88,8 +95,7 @@ export async function callLLM(
   sents: { i: number; en: string; zh: string }[]
 ): Promise<LLMOut[]> {
   if (!cfg.apiKey) throw new Error("未配置 LLM API Key");
-  const base = cfg.baseUrl.trim().replace(/\/+$/, "");
-  if (!base) throw new Error("未配置 LLM Base URL");
+  const endpoint = chatCompletionsUrl(cfg.baseUrl);
   const n = Math.max(1, cfg.extractCount);
   const system =
     "你是英语学习卡片生成器。用户给你漫画对话中的英文句子（可能全大写、含拼写/标点错误）及其中文翻译，" +
@@ -104,7 +110,7 @@ export async function callLLM(
     "5. back 是中文释义：单词以词性开头（如 \"n. 练习生\"、\"v. 翱翔\"）；语法/表达标出类型（如 \"phr. 更不用说\"）并可加简短用法说明。\n" +
     '6. 只返回 JSON 数组：[{"i": 句子序号, "en": "修正后的句子", "points": [{"front": "...", "back": "..."}]}]，不要输出其他内容。';
   const { status, body } = await postJson(
-    base + "/chat/completions",
+    endpoint,
     JSON.stringify({
       model: cfg.model,
       messages: [

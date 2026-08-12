@@ -4,7 +4,7 @@ import { parseCards, serializeCard } from "../src/lib/cards";
 import { fixText, sentenceCase } from "../src/lib/normalize";
 import { buildBack, extractMarked, stripMarkers } from "../src/lib/extract";
 import { cardKey, exampleLinesOf, meaningOf, mergeExample } from "../src/lib/dedup";
-import { parseLLMJson } from "../src/lib/llm";
+import { parseLLMJson, chatCompletionsUrl } from "../src/lib/llm";
 import AnkiToObsidianPlugin from "../src/main";
 
 // ---------- 纯函数 ----------
@@ -111,6 +111,17 @@ test("parseLLMJson: 代码块包裹、多余文字、格式错误抛错", () => 
   assert.strictEqual(outs[0].en, "Tied for 1st place?");
   assert.strictEqual(outs[0].points.length, 1);
   assert.throws(() => parseLLMJson("没有数组"));
+});
+
+test("chatCompletionsUrl: 根地址与完整接口地址均可", () => {
+  assert.strictEqual(chatCompletionsUrl("https://api.deepseek.com/v1"), "https://api.deepseek.com/v1/chat/completions");
+  assert.strictEqual(
+    chatCompletionsUrl("https://api.deepseek.com/chat/completions"),
+    "https://api.deepseek.com/chat/completions"
+  );
+  assert.strictEqual(chatCompletionsUrl("https://api.deepseek.com/chat/completions/"), "https://api.deepseek.com/chat/completions");
+  assert.strictEqual(chatCompletionsUrl("https://api.deepseek.com"), "https://api.deepseek.com/chat/completions");
+  assert.throws(() => chatCompletionsUrl("  "));
 });
 
 // ---------- 完整整理流程（内存 adapter + mock obsidian）----------

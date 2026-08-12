@@ -411,7 +411,7 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("LLM Base URL")
-      .setDesc("OpenAI 兼容接口地址，如 https://api.deepseek.com/v1")
+      .setDesc("OpenAI 兼容接口地址：根地址或完整 /chat/completions 地址均可，如 https://api.deepseek.com/v1")
       .addText((text) =>
         text
           .setPlaceholder("https://api.deepseek.com/v1")
