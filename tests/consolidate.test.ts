@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert";
-import { parseCards, serializeCard } from "../src/lib/cards";
+import { isDeleteMarker, parseCards, serializeCard } from "../src/lib/cards";
 import { fixText, sentenceCase } from "../src/lib/normalize";
 import { buildBack, extractMarked, stripMarkers } from "../src/lib/extract";
 import { cardKey, exampleLinesOf, meaningOf, mergeExample } from "../src/lib/dedup";
@@ -44,6 +44,15 @@ test("parseCards: 提取 ID、跳过 debug 块、容忍尾部分隔符", () => {
     id: "1784855769112",
   });
   assert.strictEqual(cards[1].front, "PRODIGAL");
+});
+
+test("parseCards: DELETE 标记卡", () => {
+  const cards = parseCards("DELETE\n<!--ID: 123-->");
+  assert.strictEqual(cards.length, 1);
+  assert.deepStrictEqual(cards[0], { front: "DELETE", back: "", id: "123" });
+  assert.ok(isDeleteMarker(cards[0]));
+  assert.ok(!isDeleteMarker({ front: "Delete", back: "v. 删除" }), "带释义的 delete 卡不受影响");
+  assert.ok(!isDeleteMarker({ front: "PRODIGAL", back: "n. 败家子" }));
 });
 
 test("serializeCard: 带/不带 ID", () => {
@@ -246,4 +255,52 @@ test("整理流程：重复卡合并例句保留 ID，LLM 失败留在缓冲池"
   const buffer = adapter.read("Pot/anki_card.md");
   assert.ok(buffer.includes("A NEW SENTENCE HERE."), "失败句留在缓冲池");
   assert.ok(!buffer.includes("ON EARTH"), "已处理卡从缓冲池删除");
+});
+
+test("整理流程：分页文件里的 DELETE 标记卡被移除，不影响新卡", async () => {
+  const p = makePlugin();
+  const adapter = p.app.vault.adapter as MemAdapter;
+  // 分页文件：一张正常卡（带 ID）+ 一张 DELETE 标记卡
+  adapter.write(
+    "Pot/anki/anki_1.md",
+    "On earth #basic\n到底<br>例：What on earth is this?<br>这到底是什么？\n<!--ID: 555-->\n\n---\n\nDELETE\n<!--ID: 999-->"
+  );
+  adapter.write("Pot/anki_card.md", bufferText([["NEWWORD", "新词。"]]));
+  p.callLLM = async () => [];
+
+  await p.consolidateBuffer();
+
+  const f1 = parseCards(adapter.read("Pot/anki/anki_1.md"));
+  assert.ok(!f1.some((c) => c.front === "DELETE"), "DELETE 标记卡应从分页文件移除");
+  assert.strictEqual(f1.find((c) => c.front === "On earth")?.id, "555", "正常卡保留");
+  assert.ok(f1.some((c) => c.front === "Newword"), "新卡照常写入");
+});
+
+test("整理流程：缓冲池 DELETE 标记按 ID 删除分页卡", async () => {
+  const p = makePlugin();
+  const adapter = p.app.vault.adapter as MemAdapter;
+  adapter.write(
+    "Pot/anki/anki_1.md",
+    "On earth #basic\n到底<br>例：What on earth is this?<br>这到底是什么？\n<!--ID: 555-->\n\n---\n\nKEEP #basic\n保留卡\n<!--ID: 777-->"
+  );
+  adapter.write("Pot/anki_card.md", "DELETE\n<!--ID: 555-->\n\n---\n\n");
+
+  await p.consolidateBuffer();
+
+  const f1 = parseCards(adapter.read("Pot/anki/anki_1.md"));
+  assert.strictEqual(f1.length, 1, "按 ID 删除对应卡");
+  assert.strictEqual(f1[0].front, "KEEP", "其他卡不受影响");
+  assert.strictEqual(adapter.read("Pot/anki_card.md"), "", "标记卡从缓冲池清除");
+});
+
+test("整理流程：无 ID 的 DELETE 标记不成为新卡", async () => {
+  const p = makePlugin();
+  const adapter = p.app.vault.adapter as MemAdapter;
+  adapter.write("Pot/anki_card.md", bufferText([["DELETE", ""]]));
+  p.callLLM = async () => [];
+
+  await p.consolidateBuffer();
+
+  assert.strictEqual(adapter.read("Pot/anki_card.md"), "", "缓冲池清空");
+  assert.ok(!adapter.files.has("Pot/anki/anki_1.md"), "不产出 DELETE 卡");
 });

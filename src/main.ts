@@ -1,6 +1,6 @@
 import { App, Notice, Plugin, PluginSettingTab, Setting } from "obsidian";
 import * as http from "http";
-import { Card, CARD_SEP, parseCards, serializeCard } from "./lib/cards";
+import { Card, CARD_SEP, isDeleteMarker, parseCards, serializeCard } from "./lib/cards";
 import { fixText, sentenceCase } from "./lib/normalize";
 import { buildBack, extractMarked, stripMarkers } from "./lib/extract";
 import { cardKey, mergeExample } from "./lib/dedup";
@@ -141,7 +141,7 @@ export default class AnkiToObsidianPlugin extends Plugin {
     const adapter = this.app.vault.adapter;
     const bufferPath = this.settings.potFile?.trim() || "Pot/anki_card.md";
     const deckDir = this.settings.deckDir?.trim() || "Pot/anki";
-    const stats = { added: 0, merged: 0, dropped: 0, failed: 0 };
+    const stats = { added: 0, merged: 0, dropped: 0, failed: 0, deleted: 0 };
     try {
       if (!(await adapter.exists(bufferPath))) {
         new Notice("缓冲池文件不存在：" + bufferPath);
@@ -153,11 +153,16 @@ export default class AnkiToObsidianPlugin extends Plugin {
         return;
       }
 
-      // 分类：带【】标记 / 单行单词卡 / 整句
+      // 分类：带【】标记 / 单行单词卡 / 整句；DELETE 标记单独收集
       const marked: { en: string; zh: string; tokens: { word: string; meaning: string }[] }[] = [];
       const words: Card[] = [];
       const sentences: { raw: Card; en: string; zh: string }[] = [];
+      const deleteMarkers: Card[] = [];
       for (const c of rawCards) {
+        if (isDeleteMarker(c)) {
+          deleteMarkers.push(c);
+          continue;
+        }
         const tokens = extractMarked(c.front);
         const zh = c.back.trim();
         if (tokens.length) marked.push({ en: sentenceCase(stripMarkers(c.front)), zh, tokens });
@@ -240,8 +245,28 @@ export default class AnkiToObsidianPlugin extends Plugin {
         }
       }
 
-      // 加载分页文件并去重（键 = 正面 + 释义；命中则合并例句）
+      // 加载分页文件并处理删除标记：分页文件里的 DELETE 卡直接移除；
+      // 缓冲池里带 ID 的标记按 ID 删除分页文件中的对应卡
       const files: { path: string; cards: Card[]; dirty: boolean }[] = await this.loadDeckFiles(deckDir);
+      for (const f of files) {
+        const kept = f.cards.filter((c) => !isDeleteMarker(c));
+        if (kept.length !== f.cards.length) {
+          stats.deleted += f.cards.length - kept.length;
+          f.cards = kept;
+          f.dirty = true;
+        }
+      }
+      for (const m of deleteMarkers) {
+        if (!m.id) continue;
+        for (const f of files) {
+          const kept = f.cards.filter((c) => c.id !== m.id);
+          if (kept.length !== f.cards.length) {
+            stats.deleted += f.cards.length - kept.length;
+            f.cards = kept;
+            f.dirty = true;
+          }
+        }
+      }
       const keyMap = new Map<string, { file: number; card: Card }>();
       for (let fi = 0; fi < files.length; fi++) {
         for (const card of files[fi].cards) keyMap.set(cardKey(card), { file: fi, card });
@@ -304,6 +329,8 @@ export default class AnkiToObsidianPlugin extends Plugin {
           stats.merged +
           "，跳过 " +
           stats.dropped +
+          "，删除 " +
+          stats.deleted +
           "，失败留在缓冲池 " +
           stats.failed
       );
@@ -513,7 +540,7 @@ class AnkiToObsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("整理缓冲池")
-      .setDesc("把缓冲池中的原始卡提取为学习卡（【】标记/LLM），去重合并后写入分页文件；已处理的卡从缓冲池删除")
+      .setDesc("把缓冲池中的原始卡提取为学习卡（【】标记/LLM），去重合并后写入分页文件；已处理的卡从缓冲池删除，DELETE 标记的卡从分页文件移除")
       .addButton((button) =>
         button.setButtonText("立即整理").onClick(() => {
           void this.plugin.consolidateBuffer();

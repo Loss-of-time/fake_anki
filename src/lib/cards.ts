@@ -8,6 +8,12 @@ export interface Card {
 
 export const CARD_SEP = "\n\n---\n\n";
 
+// obsidian-to-anki 删除约定：首行 DELETE + <!--ID: ...--> 注释 = 标记该卡删除
+// 精确匹配大写 DELETE，避免误删小写 delete 单词卡
+export function isDeleteMarker(c: Card): boolean {
+  return c.front.trim() === "DELETE";
+}
+
 export function parseCards(text: string): Card[] {
   const cards: Card[] = [];
   for (const block of text.split(/\n---\n/)) {
